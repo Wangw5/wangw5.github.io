@@ -1,0 +1,114 @@
+---
+title: "Predicting activity type using wearable device data"
+author: "Wei Wang"
+date: "July 20, 2015"
+output: html_document
+---
+
+# Introduction
+
+Amid the latest technology development in wearable devices, large amount of data were collected about personal activities. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, we will be using data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. Our goal is to predict the manner in which they did the exercises (`classe`).
+
+# Build the model
+
+To build the machine learning model, firstly we want to look at our training data and exculde any variables that have missing values.Then we manually remove some variables apprently useless for the prediction model. Finaly, we will reshape the test dataset the same way as training dataset.
+
+```{r,cache=TRUE,message=FALSE}
+library(caret,quietly = T)
+library(Hmisc,quietly = T)
+training <- read.csv("pml-training.csv",header = T,na.strings = c("NA", ""))
+testing <- read.csv("pml-testing.csv",header = T,na.strings = c("NA", ""))
+dim(training)
+
+## remove NAs 
+NAs <- apply(training, 2, function(x) {
+    sum(is.na(x))
+})
+
+training <- training[,NAs == 0]
+
+## remove useless variables
+ex_vars <- grep("timestamp|X|user_name|new_window", names(training))
+
+training <- training[,-ex_vars]
+testing <- testing[,names(testing) %in% names(training)]
+```
+
+After removing variables with near-zero variablity, we got the new training set:
+```{r}
+dim(training)
+```
+
+To estimate out of sample errors, we partition the training dataset into two - one used to build the model (`trainDF`) and the other (`valDF`) used to estimate out of sample error.
+
+```{r,cache=T}
+set.seed(10)
+index <- createDataPartition(y = training$classe,p=0.7,list = FALSE)
+trainDF <- training[index,]
+valDF <- training[-index,]
+```
+
+## Visulization of features
+```{r}
+# plot features
+total <- which(grepl("^total", colnames(trainDF), ignore.case = F))
+totalAccel <- trainDF[, total]
+featurePlot(x = totalAccel, y = trainDF$classe, pch = 20, main = "Feature plot", plot = "pairs")
+```
+
+
+Now, let's build our prediction models with repeated cross validation (`repeatedcv`). There certainly various machine learning models to choose from, here we will consider two popular models- random forest (`rf`) and gradient boosting model (`gbm`). The random seed number is set before each model so that we encure each model get the same data partition and repeats. We will compare the two model performance using the accuray distributions.
+
+```{r,cache=T,message=FALSE}
+# set traingControl to use CV
+tc <- trainControl(method="cv",number = 5)
+
+# rf and gbm models
+set.seed(10)
+model.rf <- train(trainDF$classe ~ ., method = "rf", trControl = tc,data=trainDF)
+
+set.seed(10)
+model.gbm <- train(classe ~ ., method = "gbm", trControl = tc,verbose=FALSE,data=trainDF)
+
+
+model.rf
+summary(model.rf)
+model.gbm
+summary(model.gbm)
+
+# collect resamples
+results <- resamples(list(RF=model.rf, GBM=model.gbm))
+# summarize the distributions
+summary(results)
+# boxplots of results
+bwplot(results)
+```
+
+From the comparison above, we see `rf` is slightly better than `gbm` though both models are pretty good in accuracy. For better or for worse, we will use `rf` model as our final machine learning algorithm.
+
+# Out of sample error estimation
+
+```{r,warning=FALSE}
+dim(valDF)
+pred <- predict(model.rf, valDF)
+OutSampErr <- 1 - sum(pred == valDF$classe)/length(pred)
+confusionMatrix(pred,valDF$classe)
+```
+
+So the out-of-sample error is estimated as `r round(OutSampErr*100,3)`\%.  
+
+# Prediction on the test dataset
+```{r}
+model.pred <- as.character(predict(model.rf, testing))
+
+pml_write_files = function(x) {
+    n = length(x)
+    for (i in 1:n) {
+        filename = paste0("problem_id_", i, ".txt")
+        write.table(x[i], file = filename, quote = FALSE, row.names = FALSE, 
+            col.names = FALSE)
+    }
+}
+
+pml_write_files(model.pred)
+```
